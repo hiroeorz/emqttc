@@ -64,17 +64,18 @@
                               qos    = 0,
                               retain = 0}).
 
--record(mqtt_frame_connect,  {proto_ver,
-                              will_retain,
-                              will_qos,
-                              will_flag,
-                              clean_sess,
-                              keep_alive,
-                              client_id,
-                              will_topic,
-                              will_msg,
-                              username,
-                              password}).
+-record(mqtt_frame_connect,  {client_id   = <<>>,
+			      proto_ver   = ?MQTT_PROTO_MAJOR,
+			      username    = undefined,
+                              password    = undefined,
+                              will_retain = false,
+                              will_qos    = false,
+                              will_flag   = false,
+                              clean_sess  = false,
+                              keep_alive  = false,
+                              will_topic  = undefined,
+                              will_msg    = undefined
+                             }).
 
 -record(mqtt_frame_connack,  {return_code}).
 
