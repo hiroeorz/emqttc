@@ -1,28 +1,24 @@
-emqttc
-======
+# emqttc
 
 erlang mqtt client.
 
-Build
--------------------
+## Build
 
 ```
 $ make
 ```
 
-Start Application
--------------------
+## Start Application
 
-```
+```erl-sh
 1> application:start(emqttc).
 ```
 
-Subscribe and Publush
--------------------
+## Subscribe and Publush
 
 Connect to MQTT Broker.
 
-```
+```erl-sh
 1> emqttc:start_link([{host, "test.mosquitte.org"}]).
 
 %% publish.
