@@ -19,7 +19,7 @@ $ make
 Connect to MQTT Broker.
 
 ```erl-sh
-1> emqttc:start_link([{host, "test.mosquitte.org"}]).
+1> emqttc:start_link([{host, "test.mosquitto.org"}]).
 
 %% publish.
 2> emqttc:publish(emqttc, <<"temp/random">>, <<"0">>).

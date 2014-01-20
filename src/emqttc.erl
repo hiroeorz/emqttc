@@ -37,8 +37,6 @@
 	 connected/2,
 	 connected/3]).
 
--export([test_sub/0]).
-
 -define(TCPOPTIONS, [binary,
 		     {packet,    raw},
 		     {reuseaddr, true},
@@ -56,48 +54,119 @@
 		username  :: binary(),
 		password  :: binary() }).
 
+%%--------------------------------------------------------------------
+%% @doc start application
+%% @end
+%%--------------------------------------------------------------------
+-spec start() -> ok.
 start() ->
     application:start(emqttc).
 
-test_sub() ->
-    subscribe(?MODULE, [{<<"temp/random">>, 0}]),
-    emqttc_sub_event:add_handler().
-
+%%--------------------------------------------------------------------
+%% @doc Starts the server
+%% @end
+%%--------------------------------------------------------------------
+-spec start_link() -> {ok, pid()} | ignore | {error, term()}.
 start_link() ->
-    Opts = [{host, "test.mosquitto.org"}, {port, 1883}],
-    start_link(Opts).
+    start_link([]).
 
+%%--------------------------------------------------------------------
+%% @doc Starts the server with options.
+%% @end
+%%--------------------------------------------------------------------
+-spec start_link([tuple()]) -> {ok, pid()} | ignore | {error, term()}.
 start_link(Opts) ->
     start_link(emqttc, Opts).
 
+%%--------------------------------------------------------------------
+%% @doc Starts the server with name and options.
+%% @end
+%%--------------------------------------------------------------------
+-spec start_link(atom(), [tuple()]) -> {ok, pid()} | ignore | {error, term()}.
 start_link(Name, Opts) ->
     gen_fsm:start_link({local, Name}, ?MODULE, [Name, Opts], []).
 
-%%api functions
+%%--------------------------------------------------------------------
+%% @doc publish to broker.
+%% @end
+%%--------------------------------------------------------------------
+-spec publish(C, Topic, Payload) -> ok when
+      C :: pid() | atom(),
+      Topic :: binary(),
+      Payload :: binary().
 publish(C, Topic, Payload) ->
     publish(C, #mqtt_msg{topic = Topic, payload = Payload}).
 
+-spec publish(C, #mqtt_msg{}) -> ok when
+      C :: pid() | atom().			       
 publish(C, Msg) when is_record(Msg, mqtt_msg) ->
     gen_fsm:send_event(C, {publish, Msg}).
 
+%%--------------------------------------------------------------------
+%% @doc puback to broker.
+%% @end
+%%--------------------------------------------------------------------
+-spec puback(C, MsgId) -> ok when
+      C :: pid() | atom(),
+      MsgId :: non_neg_integer().      
 puback(C, MsgId) when is_integer(MsgId) ->
     gen_fsm:send_event(C, {puback, MsgId}).
 
+%%--------------------------------------------------------------------
+%% @doc pubrec to broker.
+%% @end
+%%--------------------------------------------------------------------
+-spec pubrec(C, MsgId) -> ok when
+      C :: pid() | atom(),
+      MsgId :: non_neg_integer().
 pubrec(C, MsgId) when is_integer(MsgId) ->
     gen_fsm:send_event(C, {pubrec, MsgId}).
 
+%%--------------------------------------------------------------------
+%% @doc pubcomp.
+%% @end
+%%--------------------------------------------------------------------
+-spec pubcomp(C, MsgId) -> ok when
+      C :: pid() | atom(),
+      MsgId :: non_neg_integer().
 pubcomp(C, MsgId) when is_integer(MsgId) ->
     gen_fsm:send_event(C, {pubcomp, MsgId}).
 
+%%--------------------------------------------------------------------
+%% @doc subscribe request to broker.
+%% @end
+%%--------------------------------------------------------------------
+-spec subscribe(C, Topics) -> ok when
+      C :: pid() | atom(),
+      Topics :: [ {binary(), non_neg_integer()} ].
 subscribe(C, Topics) ->
     gen_fsm:send_event(C, {subscribe, Topics}).
 
+%%--------------------------------------------------------------------
+%% @doc unsubscribe request to broker.
+%% @end
+%%--------------------------------------------------------------------
+-spec unsubscribe(C, Topics) -> ok when
+      C :: pid() | atom(),
+      Topics :: [ {binary(), non_neg_integer()} ].
 unsubscribe(C, Topics) ->
     gen_fsm:send_event(C, {unsubscribe, Topics}).
 
+%%--------------------------------------------------------------------
+%% @doc Send ping to broker.
+%% @end
+%%--------------------------------------------------------------------
+-spec ping(C) -> ok when
+      C :: pid() | atom().
 ping(C) ->
     gen_fsm:send_event(C, ping).
 
+%%--------------------------------------------------------------------
+%% @doc Disconnect from broker.
+%% @end
+%%--------------------------------------------------------------------
+-spec disconnect(C) -> ok when
+      C :: pid() | atom().
 disconnect(C) ->
     gen_fsm:send_event(C, disconnect).
 
