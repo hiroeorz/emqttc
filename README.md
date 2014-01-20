@@ -39,12 +39,12 @@ ok
 ok
 
 %% add event handler.
-5> emqttc_sub_event:add_handler().
+5> emqttc_event:add_handler().
 ok
 ```
 
 You can add your custom event handler.
 
 ```erl-sh
-1> emqttc_sub_event:add_handler(your_handler, []).
+1> emqttc_event:add_handler(your_handler, []).
 ```
