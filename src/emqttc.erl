@@ -12,7 +12,7 @@
 	 start_link/2]).
 
 %api
--export([publish/2, publish/3,
+-export([publish/2, publish/3, publish/4,
 	 puback/2,
 	 pubrec/2,
 	 pubcomp/2,
@@ -52,7 +52,8 @@
 		sock      :: gen_tcp:socket(),
 		msgid = 0 :: non_neg_integer(),
 		username  :: binary(),
-		password  :: binary() }).
+		password  :: binary(),
+		ref       :: dict() }).
 
 %%--------------------------------------------------------------------
 %% @doc start application
@@ -90,17 +91,34 @@ start_link(Name, Opts) when is_atom(Name), is_list(Opts) ->
 %% @doc publish to broker.
 %% @end
 %%--------------------------------------------------------------------
--spec publish(C, Topic, Payload) -> ok when
+-spec publish(C, Topic, Payload) -> ok | {ok, MsgId} when
       C :: pid() | atom(),
       Topic :: binary(),
-      Payload :: binary().
-publish(C, Topic, Payload) ->
+      Payload :: binary(),
+      MsgId :: non_neg_integer().
+publish(C, Topic, Payload) when is_binary(Topic), is_binary(Payload) ->
     publish(C, #mqtt_msg{topic = Topic, payload = Payload}).
 
--spec publish(C, #mqtt_msg{}) -> ok when
+-spec publish(C, Topic, Payload, Qos) -> ok | {ok, MsgId} when
+      C :: pid() | atom(),
+      Topic :: binary(),
+      Payload :: binary(),
+      Qos :: non_neg_integer(),
+      MsgId :: non_neg_integer().
+publish(C, Topic, Payload, Qos) when is_binary(Topic), is_binary(Payload),
+				     is_integer(Qos) ->
+    publish(C, #mqtt_msg{topic = Topic, payload = Payload, qos = Qos}).
+
+-spec publish(C, #mqtt_msg{}) -> ok | pubrec when
       C :: pid() | atom().			       
-publish(C, Msg) when is_record(Msg, mqtt_msg) ->
-    gen_fsm:send_event(C, {publish, Msg}).
+publish(C, Msg = #mqtt_msg{qos = ?QOS_0}) when is_record(Msg, mqtt_msg) ->
+    gen_fsm:send_event(C, {publish, Msg});
+
+publish(C, Msg = #mqtt_msg{qos = ?QOS_1}) when is_record(Msg, mqtt_msg) ->
+    gen_fsm:sync_send_event(C, {publish, Msg});
+
+publish(C, Msg = #mqtt_msg{qos = ?QOS_2}) when is_record(Msg, mqtt_msg) ->
+    gen_fsm:sync_send_event(C, {publish, Msg}).
 
 %%--------------------------------------------------------------------
 %% @doc puback.
@@ -156,10 +174,10 @@ unsubscribe(C, Topics) ->
 %% @doc Send ping to broker.
 %% @end
 %%--------------------------------------------------------------------
--spec ping(C) -> ok when
+-spec ping(C) -> pong when
       C :: pid() | atom().
 ping(C) ->
-    gen_fsm:send_event(C, ping).
+    gen_fsm:sync_send_event(C, ping).
 
 %%--------------------------------------------------------------------
 %% @doc Disconnect from broker.
@@ -176,7 +194,7 @@ init([_Name, Args]) ->
     Port = proplists:get_value(port, Args, 1883),
     Username = proplists:get_value(username, Args, undefined),
     Password = proplists:get_value(password, Args, undefined),
-    State = #state{host = Host, port = Port,
+    State = #state{host = Host, port = Port, ref = dict:new(),
 		   username = Username, password = Password},
     {ok, connecting, State, 0}.
 
@@ -237,9 +255,10 @@ connected({publish, Msg}, State=#state{sock=Sock, msgid=MsgId}) ->
 					 retain = Retain,
 					 dup    = Dup},
 	       variable = #mqtt_frame_publish{topic_name = Topic,
-					      message_id = if
-							       Qos == ?QOS_0 -> undefined;
-							       true -> MsgId
+					      message_id = if Qos == ?QOS_0 ->
+								   undefined;
+							      true ->
+								   MsgId
 							   end},
 	       payload = Payload},
     send_frame(Sock, Frame),
@@ -259,10 +278,6 @@ connected({pubrel, MsgId}, State=#state{sock=Sock}) ->
 
 connected({pubcomp, MsgId}, State=#state{sock=Sock}) ->
     send_puback(Sock, ?PUBCOMP, MsgId),
-    {next_state, connected, State};
-
-connected(ping, State=#state{sock=Sock}) ->
-    send_ping(Sock),
     {next_state, connected, State};
 
 connected({subscribe, Topics}, State=#state{msgid=MsgId,sock=Sock}) ->
@@ -294,6 +309,34 @@ connected(disconnect, State=#state{sock=Sock}) ->
 
 connected(_Event, State) -> 
     {next_state, connected, State}.
+
+connected({publish, Msg}, From, 
+	  State=#state{sock=Sock, msgid=MsgId, ref=Ref}) ->
+    #mqtt_msg{retain     = Retain,
+	      qos        = Qos,
+	      topic      = Topic,
+	      dup        = Dup,
+	      payload    = Payload} = Msg,
+    Frame = #mqtt_frame{
+	       fixed = #mqtt_frame_fixed{type 	 = ?PUBLISH,
+					 qos    = Qos,
+					 retain = Retain,
+					 dup    = Dup},
+	       variable = #mqtt_frame_publish{topic_name = Topic,
+					      message_id = if Qos == ?QOS_0 ->
+								   undefined;
+							      true ->
+								   MsgId
+							   end},
+	       payload = Payload},
+    send_frame(Sock, Frame),
+    Ref2 = dict:append(publish, From, Ref),
+    {next_state, connected, State#state{msgid=MsgId+1, ref=Ref2}};
+
+connected(ping, From, State=#state{sock=Sock, ref = Ref}) ->
+    send_ping(Sock),
+    Ref2 = dict:append(ping, From, Ref),
+    {next_state, connected, State#state{ref = Ref2}};
 
 connected(Event, _From, State) ->
     io:format("unsupported event: ~p~n", [Event]),
@@ -361,17 +404,17 @@ handle_info({tcp, _Sock, <<?PUBACK:4/integer,
 			   _:1/integer, _:2/integer, _:1/integer,
 			   2:8/integer,
 			   MsgId:16/big-unsigned-integer>>},
-	    connected, State) ->
-    gen_event:notify(emqttc_event, {puback, MsgId}),
-    {next_state, connected, State};
+	    connected, State=#state{ref=Ref}) ->
+    Ref2 = reply({ok, MsgId}, publish, Ref),
+    {next_state, connected, State#state{ref=Ref2}};
 
 %% pubrec message from broker.
 handle_info({tcp, _Sock, <<?PUBREC:4/integer,
 			   _:1/integer, _:2/integer, _:1/integer,
 			   2:8/integer,
 			   MsgId:16/big-unsigned-integer>>},
-	    connected, State) ->
-    gen_event:notify(emqttc_event, {pubrec, MsgId}),
+	    connected, State=#state{sock=Sock}) ->
+    send_puback(Sock, ?PUBREL, MsgId),
     {next_state, connected, State};
 
 %% pubcomp message from broker.
@@ -379,17 +422,17 @@ handle_info({tcp, _Sock, <<?PUBCOMP:4/integer,
 			   _:1/integer, _:2/integer, _:1/integer,
 			   2:8/integer,
 			   MsgId:16/big-unsigned-integer>>},
-	    connected, State) ->
-    gen_event:notify(emqttc_event, {pubcomp, MsgId}),
-    {next_state, connected, State};
+	    connected, State=#state{ref=Ref}) ->
+    Ref2 = reply({ok, MsgId}, publish, Ref),
+    {next_state, connected, State#state{ref=Ref2}};
 
 %% pingresp message from broker.
 handle_info({tcp, _Sock, <<?PINGRESP:4/integer,
 			   _:1/integer, _:2/integer, _:1/integer,
 			   0:8/integer>>},
-	    connected, State) ->
-    gen_event:notify(emqttc_event, {pingresp}),
-    {next_state, connected, State};
+	    connected, State=#state{ref = Ref}) ->
+    Ref2 = reply(ok, ping, Ref),
+    {next_state, connected, State#state{ref = Ref2}};
 
 handle_info({tcp, _Sock, Data}, connected, State) ->
     <<Code:4/integer, _:4/integer, _/binary>> = Data,
@@ -421,9 +464,9 @@ terminate(_Reason, _StateName, _State) ->
 code_change(_OldVsn, StateName, State, _Extra) ->
     {ok, StateName, State}.
 
-send_puback(Sock, _Type, MsgId) ->
+send_puback(Sock, Type, MsgId) ->
     Frame = #mqtt_frame{
-	       fixed = #mqtt_frame_fixed{type = ?PUBACK},
+	       fixed = #mqtt_frame_fixed{type = Type},
 	       variable = #mqtt_frame_publish{message_id = MsgId}},
     send_frame(Sock, Frame).
 
@@ -446,3 +489,7 @@ send_ping(Sock) ->
 send_frame(Sock, Frame) ->
     erlang:port_command(Sock, emqtt_frame:serialise(Frame)).
 
+reply(Reply, Name, Ref) ->
+    {ok, [From | FromTail]} = dict:find(Name, Ref),
+    gen_fsm:reply(From, Reply),
+    dict:store(Name, FromTail, Ref).
