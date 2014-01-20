@@ -1,6 +1,10 @@
 -module(emqttc).
+-behavior(gen_fsm).
 
 -include("emqtt_frame.hrl").
+
+%% start application.
+-export([start/0]).
 
 %startup
 -export([start_link/0,
@@ -8,7 +12,7 @@
 	 start_link/2]).
 
 %api
--export([publish/2,
+-export([publish/2, publish/3,
 	 puback/2,
 	 pubrec/2,
 	 pubcomp/2,
@@ -17,8 +21,6 @@
 	 ping/1,
 	 disconnect/1]).
 
-
--behavior(gen_fsm).
 
 %% gen_fsm callbacks
 -export([init/1,
@@ -50,16 +52,19 @@
 -record(state, {host      :: inet:ip_address(),
 		port      :: inet:port_number(),
 		sock      :: gen_tcp:socket(),
-		msgid = 0 :: non_neg_integer()}).
+		msgid = 0 :: non_neg_integer(),
+		username  :: binary(),
+		password  :: binary() }).
+
+start() ->
+    application:start(emqttc).
 
 test_sub() ->
-    {ok, C} = start_link(),
-    timer:sleep(3000),
-    subscribe(C, [{<<"temp/random">>, 0}]).
+    subscribe(?MODULE, [{<<"temp/random">>, 0}]),
+    emqttc_sub_event:add_handler().
 
 start_link() ->
-    %%start_link([]).
-    Opts = [{host, "54.238.215.71"}, {port, 1883}],
+    Opts = [{host, "test.mosquitto.org"}, {port, 1883}],
     start_link(Opts).
 
 start_link(Opts) ->
@@ -67,7 +72,10 @@ start_link(Opts) ->
 
 start_link(Name, Opts) ->
     gen_fsm:start_link({local, Name}, ?MODULE, [Name, Opts], []).
-						%api functions
+
+%%api functions
+publish(C, Topic, Payload) ->
+    publish(C, #mqtt_msg{topic = Topic, payload = Payload}).
 
 publish(C, Msg) when is_record(Msg, mqtt_msg) ->
     gen_fsm:send_event(C, {publish, Msg}).
@@ -93,11 +101,14 @@ ping(C) ->
 disconnect(C) ->
     gen_fsm:send_event(C, disconnect).
 
-						%gen_fsm callbacks
+%%gen_fsm callbacks
 init([_Name, Args]) ->
     Host = proplists:get_value(host, Args, "localhost"),
     Port = proplists:get_value(port, Args, 1883),
-    State = #state{host = Host, port = Port},
+    Username = proplists:get_value(username, Args, undefined),
+    Password = proplists:get_value(password, Args, undefined),
+    State = #state{host = Host, port = Port,
+		   username = Username, password = Password},
     {ok, connecting, State, 0}.
 
 connecting(timeout, State) ->
@@ -124,7 +135,7 @@ connect(#state{host = Host, port = Port} = State) ->
 	    {next_state, connecting, State#state{sock = undefined}}
     end.
 
-send_connect(#state{sock=Sock}) ->
+send_connect(#state{sock=Sock, username=Username, password=Password}) ->
     Frame = 
 	#mqtt_frame{
 	   fixed = #mqtt_frame_fixed{
@@ -133,8 +144,8 @@ send_connect(#state{sock=Sock}) ->
 		      qos = 1,
 		      retain = 0},
 	   variable = #mqtt_frame_connect{
-			 username   = <<"guest">>,
-			 password   = <<"guest">>,
+			 username   = Username,
+			 password   = Password,
 			 proto_ver  = ?MQTT_PROTO_MAJOR,
 			 clean_sess = true,
 			 keep_alive = 60,
@@ -220,9 +231,10 @@ connected(Event, _From, State) ->
     {reply, {error, unsupport}, connected, State}.
 
 reconnect() ->
-						%FIXME:
+    %%FIXME
     erlang:send_after(30000, self(), {timeout, reconnect}).
 
+%% connack message from broker.
 handle_info({tcp, _Sock, <<?CONNACK:4/integer, _:4/integer, 2:8/integer,
 			 _:8/integer, ReturnCode:8/unsigned-integer>>},
 	    waiting_for_connack, State) ->
@@ -247,36 +259,55 @@ handle_info({tcp, _Sock, <<?CONNACK:4/integer, _:4/integer, 2:8/integer,
 	    {next_state, waiting_for_connack, State}
     end;
 
+%% suback message from broker.
 handle_info({tcp, _Sock, <<?SUBACK:4/integer, _:4/integer, _/binary>>},
 	    connected, State) ->
-    io:format("start subscribe~n"),
-    {next_state, connected, State};    
+    {next_state, connected, State};
 
+%% pub message from broker(QoS = 0).
 handle_info({tcp, _Sock, <<?PUBLISH:4/integer,
-			   _:1/integer, 0:2/integer, 0:1/integer,
+			   _:1/integer, ?QOS_0:2/integer, _:1/integer,
 			   _Len:8/integer,
 			   TopicSize:16/big-unsigned-integer,
 			   Topic:TopicSize/binary,
 			   Payload/binary>>},
 	    connected, State) ->
-    io:format("sub: topic:~p~n", [Topic]),
-    io:format("sub: payload:~p~n", [Payload]),
+    gen_event:notify(emqttc_sub_event, {publish, Topic, Payload}),
     {next_state, connected, State};
 
+%% pub message from broker(QoS = 1 or 2).
 handle_info({tcp, _Sock, <<?PUBLISH:4/integer,
-			   _:1/integer, Qos:2/integer, 0:1/integer,
+			   _:1/integer, Qos:2/integer, _:1/integer,
 			   _Len:8/integer,
 			   TopicSize:16/big-unsigned-integer,
 			   Topic:TopicSize/binary,
 			   MsgId:16/big-unsigned-integer,
 			   Payload/binary>>},
-	    connected, State) when Qos =:= 1; Qos =:= 1 ->
-    io:format("sub: topic:~p(msgid:~p)~n", [Topic, MsgId]),
-    io:format("sub: payload:~p~n", [Payload]),
+	    connected, State) when Qos =:= ?QOS_1; Qos =:= ?QOS_2 ->
+    gen_event:notify(emqttc_sub_event, {publish, Topic, Payload, Qos, MsgId}),
+    {next_state, connected, State};
+
+%% pubrec message from broker.
+handle_info({tcp, _Sock, <<?PUBACK:4/integer,
+			   _:1/integer, _:2/integer, _:1/integer,
+			   2:8/integer,
+			   MsgId:16/big-unsigned-integer>>},
+	    connected, State) ->
+    gen_event:notify(emqttc_sub_event, {puback, MsgId}),
+    {next_state, connected, State};
+
+%% pubrec message from broker.
+handle_info({tcp, _Sock, <<?PUBREC:4/integer,
+			   _:1/integer, _:2/integer, _:1/integer,
+			   2:8/integer,
+			   MsgId:16/big-unsigned-integer>>},
+	    connected, State) ->
+    gen_event:notify(emqttc_sub_event, {pubrec, MsgId}),
     {next_state, connected, State};
 
 handle_info({tcp, _Sock, Data}, connected, State) ->
-    io:format("data received from remote: ~p~n", [Data]),
+    <<Code:4/integer, _:4/integer, _/binary>> = Data,
+    io:format("data received from remote(code:~w): ~p~n", [Code, Data]),
     {next_state, connected, State};
 
 handle_info({tcp_closed, Sock}, connected, State=#state{sock=Sock}) ->
