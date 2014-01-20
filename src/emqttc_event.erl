@@ -6,7 +6,7 @@
 %%% @end
 %%% Created : 20 Jan 2014 by HIROE Shin <shin@HIROE-no-MacBook-Pro.local>
 %%%-------------------------------------------------------------------
--module(emqttc_sub_event).
+-module(emqttc_event).
 
 -behaviour(gen_event).
 
@@ -100,6 +100,10 @@ handle_event({puback, MsgId}, State) ->
 
 handle_event({pubrec, MsgId}, State) ->
     io:format("pubrec: message_id:~p~n", [MsgId]),
+    {ok, State};
+
+handle_event({pingresp}, State) ->
+    io:format("pong~n"),
     {ok, State};
 
 handle_event(_Event, State) ->

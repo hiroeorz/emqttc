@@ -75,7 +75,7 @@ start_link() ->
 %% @end
 %%--------------------------------------------------------------------
 -spec start_link([tuple()]) -> {ok, pid()} | ignore | {error, term()}.
-start_link(Opts) ->
+start_link(Opts) when is_list(Opts) ->
     start_link(emqttc, Opts).
 
 %%--------------------------------------------------------------------
@@ -83,7 +83,7 @@ start_link(Opts) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec start_link(atom(), [tuple()]) -> {ok, pid()} | ignore | {error, term()}.
-start_link(Name, Opts) ->
+start_link(Name, Opts) when is_atom(Name), is_list(Opts) ->
     gen_fsm:start_link({local, Name}, ?MODULE, [Name, Opts], []).
 
 %%--------------------------------------------------------------------
@@ -341,7 +341,7 @@ handle_info({tcp, _Sock, <<?PUBLISH:4/integer,
 			   Topic:TopicSize/binary,
 			   Payload/binary>>},
 	    connected, State) ->
-    gen_event:notify(emqttc_sub_event, {publish, Topic, Payload}),
+    gen_event:notify(emqttc_event, {publish, Topic, Payload}),
     {next_state, connected, State};
 
 %% pub message from broker(QoS = 1 or 2).
@@ -353,7 +353,7 @@ handle_info({tcp, _Sock, <<?PUBLISH:4/integer,
 			   MsgId:16/big-unsigned-integer,
 			   Payload/binary>>},
 	    connected, State) when Qos =:= ?QOS_1; Qos =:= ?QOS_2 ->
-    gen_event:notify(emqttc_sub_event, {publish, Topic, Payload, Qos, MsgId}),
+    gen_event:notify(emqttc_event, {publish, Topic, Payload, Qos, MsgId}),
     {next_state, connected, State};
 
 %% pubrec message from broker.
@@ -362,7 +362,7 @@ handle_info({tcp, _Sock, <<?PUBACK:4/integer,
 			   2:8/integer,
 			   MsgId:16/big-unsigned-integer>>},
 	    connected, State) ->
-    gen_event:notify(emqttc_sub_event, {puback, MsgId}),
+    gen_event:notify(emqttc_event, {puback, MsgId}),
     {next_state, connected, State};
 
 %% pubrec message from broker.
@@ -371,7 +371,24 @@ handle_info({tcp, _Sock, <<?PUBREC:4/integer,
 			   2:8/integer,
 			   MsgId:16/big-unsigned-integer>>},
 	    connected, State) ->
-    gen_event:notify(emqttc_sub_event, {pubrec, MsgId}),
+    gen_event:notify(emqttc_event, {pubrec, MsgId}),
+    {next_state, connected, State};
+
+%% pubcomp message from broker.
+handle_info({tcp, _Sock, <<?PUBCOMP:4/integer,
+			   _:1/integer, _:2/integer, _:1/integer,
+			   2:8/integer,
+			   MsgId:16/big-unsigned-integer>>},
+	    connected, State) ->
+    gen_event:notify(emqttc_event, {pubcomp, MsgId}),
+    {next_state, connected, State};
+
+%% pingresp message from broker.
+handle_info({tcp, _Sock, <<?PINGRESP:4/integer,
+			   _:1/integer, _:2/integer, _:1/integer,
+			   0:8/integer>>},
+	    connected, State) ->
+    gen_event:notify(emqttc_event, {pingresp}),
     {next_state, connected, State};
 
 handle_info({tcp, _Sock, Data}, connected, State) ->

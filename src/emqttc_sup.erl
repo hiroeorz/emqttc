@@ -24,8 +24,8 @@ start_link() ->
 %% ===================================================================
 
 init([]) ->
-    SubEvent = {emqttc_sub_event, {emqttc_sub_event, start_link, []},
-		permanent, 2000, worker, [emqttc_sub_event]},
+    SubEvent = {emqttc_event, {emqttc_event, start_link, []},
+		permanent, 2000, worker, [emqttc_event]},
 
     {ok, { {one_for_one, 5, 10}, [SubEvent]} }.
 
