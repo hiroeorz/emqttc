@@ -103,7 +103,7 @@ publish(C, Msg) when is_record(Msg, mqtt_msg) ->
     gen_fsm:send_event(C, {publish, Msg}).
 
 %%--------------------------------------------------------------------
-%% @doc puback to broker.
+%% @doc puback.
 %% @end
 %%--------------------------------------------------------------------
 -spec puback(C, MsgId) -> ok when
@@ -113,7 +113,7 @@ puback(C, MsgId) when is_integer(MsgId) ->
     gen_fsm:send_event(C, {puback, MsgId}).
 
 %%--------------------------------------------------------------------
-%% @doc pubrec to broker.
+%% @doc pubrec.
 %% @end
 %%--------------------------------------------------------------------
 -spec pubrec(C, MsgId) -> ok when
