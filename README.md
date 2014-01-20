@@ -45,6 +45,6 @@ ok
 
 You can add your custom event handler.
 
-```
+```erl-sh
 1> emqttc_sub_event:add_handler(your_handler, []).
 ```
