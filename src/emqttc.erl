@@ -13,6 +13,7 @@
 
 %api
 -export([publish/2, publish/3, publish/4,
+	 pubrel/2,
 	 puback/2,
 	 pubrec/2,
 	 pubcomp/2,
@@ -119,6 +120,16 @@ publish(C, Msg = #mqtt_msg{qos = ?QOS_1}) when is_record(Msg, mqtt_msg) ->
 
 publish(C, Msg = #mqtt_msg{qos = ?QOS_2}) when is_record(Msg, mqtt_msg) ->
     gen_fsm:sync_send_event(C, {publish, Msg}).
+
+%%--------------------------------------------------------------------
+%% @doc puback.
+%% @end
+%%--------------------------------------------------------------------
+-spec pubrel(C, MsgId) -> ok when
+      C :: pid() | atom(),
+      MsgId :: non_neg_integer().      
+pubrel(C, MsgId) when is_integer(MsgId) ->
+    gen_fsm:sync_send_event(C, {pubrel, MsgId}).
 
 %%--------------------------------------------------------------------
 %% @doc puback.
@@ -272,10 +283,6 @@ connected({pubrec, MsgId}, State=#state{sock=Sock}) ->
     send_puback(Sock, ?PUBREC, MsgId),
     {next_state, connected, State};
 
-connected({pubrel, MsgId}, State=#state{sock=Sock}) ->
-    send_puback(Sock, ?PUBREL, MsgId),
-    {next_state, connected, State};
-
 connected({pubcomp, MsgId}, State=#state{sock=Sock}) ->
     send_puback(Sock, ?PUBCOMP, MsgId),
     {next_state, connected, State};
@@ -309,6 +316,11 @@ connected(disconnect, State=#state{sock=Sock}) ->
 
 connected(_Event, State) -> 
     {next_state, connected, State}.
+
+connected({pubrel, MsgId}, From, State=#state{sock=Sock, ref=Ref}) ->
+    send_puback(Sock, ?PUBREL, MsgId),
+    Ref2 = dict:append(pubrel, From, Ref),
+    {next_state, connected, State#state{ref=Ref2}};
 
 connected({publish, Msg}, From, 
 	  State=#state{sock=Sock, msgid=MsgId, ref=Ref}) ->
@@ -413,9 +425,9 @@ handle_info({tcp, _Sock, <<?PUBREC:4/integer,
 			   _:1/integer, _:2/integer, _:1/integer,
 			   2:8/integer,
 			   MsgId:16/big-unsigned-integer>>},
-	    connected, State=#state{sock=Sock}) ->
-    send_puback(Sock, ?PUBREL, MsgId),
-    {next_state, connected, State};
+	    connected, State=#state{ref=Ref}) ->
+    Ref2 = reply({ok, MsgId}, publish, Ref),
+    {next_state, connected, State#state{ref=Ref2}};
 
 %% pubcomp message from broker.
 handle_info({tcp, _Sock, <<?PUBCOMP:4/integer,
@@ -423,7 +435,7 @@ handle_info({tcp, _Sock, <<?PUBCOMP:4/integer,
 			   2:8/integer,
 			   MsgId:16/big-unsigned-integer>>},
 	    connected, State=#state{ref=Ref}) ->
-    Ref2 = reply({ok, MsgId}, publish, Ref),
+    Ref2 = reply({ok, MsgId}, pubrel, Ref),
     {next_state, connected, State#state{ref=Ref2}};
 
 %% pingresp message from broker.
